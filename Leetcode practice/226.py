@@ -117,12 +117,6 @@ def format_output(ans):
 # =========================
 
 class Solution:
-    # paste the leetcode function here
-    def invertTree(self, root: Optional[TreeNode]) -> Optional[TreeNode]:
-        # combine the idea of build tree from list and tree traversal
-        from collections import deque
-
-class Solution:
     def invertTree(self, root: Optional[TreeNode]) -> Optional[TreeNode]:
         if not root:
             return None
@@ -159,6 +153,6 @@ if __name__ == "__main__":
         # tree problems: build_tree([1, None, 2, 3])
         build_tree([4,2,7,1,3,6,9])
     ]
-
+    
     ans = method(*args)
     print(format_output(ans))
