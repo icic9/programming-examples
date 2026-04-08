@@ -10,7 +10,7 @@ This repository showcases my programming work in data analysis, finance, and alg
 - **Leetcode Practice**: Solutions to various LeetCode problems in Python.
 
 ## Technologies Used
-- Python (NumPy, Pandas, SciPy)
+- Python (e.g., NumPy, Pandas, Scipy, OOP)
 - Jupyter Notebooks
 - Git/GitHub
 
