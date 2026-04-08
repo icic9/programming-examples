@@ -1,0 +1,193 @@
+HOW TO RUN THE TRADING STRATEGIES & GET RESULTS
+================================================
+IMC Prosperity 4 — Tutorial Round
+Author: Ian Chan
+
+This folder contains four trading strategies (trader (1).py through trader (4).py)
+and a local backtester that simulates them against real tutorial round market data.
+This guide explains how to set everything up and run backtests from scratch.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FOLDER STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Tutorial round/
+  │
+  ├── trader (1).py          ← Strategy v1: ML-inspired heuristics
+  ├── trader (2).py          ← Strategy v2: Econometric foundation (ARIMA)
+  ├── trader (3).py          ← Strategy v3: Bug-fixed version of v2
+  ├── trader (4).py          ← Strategy v4: Final (book-adaptive pennying)
+  │
+  ├── strategy_journey.txt   ← First-person explanation of the strategy journey
+  ├── HOW_TO_RUN.txt         ← This file
+  │
+  └── imc-prosperity-4-backtester/       ← Local backtesting engine
+      ├── prosperity4bt/
+      │   ├── datamodel.py               ← Data models (do NOT modify)
+      │   └── resources/round0/          ← Tutorial round market data (CSVs)
+      │       ├── prices_round_0_day_-1.csv
+      │       ├── prices_round_0_day_-2.csv
+      │       ├── trades_round_0_day_-1.csv
+      │       └── trades_round_0_day_-2.csv
+      └── backtests/                     ← Output logs are saved here
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PREREQUISITES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Python 3.11 or 3.12 is required.
+
+  Install the required packages (only needed once):
+
+    pip install jsonpickle typer
+
+  No other external libraries are needed — the strategies use only the
+  Python standard library plus jsonpickle.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 1 — NAVIGATE TO THE BACKTESTER FOLDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  All backtest commands must be run from inside the backtester directory.
+  Open a terminal, navigate to this "Tutorial round" folder, then run:
+
+    cd .\imc-prosperity-4-backtester
+
+  To confirm you are in the right place, run:
+
+    ls
+
+  You should see folders like prosperity4bt/ and backtests/ listed.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 2 — SET PYTHONPATH (if needed)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The trader scripts import from datamodel.py, which lives inside the
+  backtester package. If you see this error when running:
+
+    ModuleNotFoundError: No module named 'datamodel'
+
+  Fix it by setting PYTHONPATH to the folder containing datamodel.py.
+  Run this once per terminal session before running any backtests:
+
+  On Windows (PowerShell):
+    $env:PYTHONPATH = ".\prosperity4bt"
+
+  On Windows (Command Prompt / cmd):
+    set PYTHONPATH=.\prosperity4bt
+
+  On Mac / Linux (bash/zsh):
+    export PYTHONPATH=./prosperity4bt
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 3 — RUN A BACKTEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Command format (run from inside imc-prosperity-4-backtester/):
+
+    python -m prosperity4bt <path_to_trader_file> <round>
+
+  The tutorial round data is Round 0, Days -1 and -2.
+
+  ── Run all available days in the tutorial round (recommended):
+
+    python -m prosperity4bt "../trader (1).py" 0
+    python -m prosperity4bt "../trader (2).py" 0
+    python -m prosperity4bt "../trader (3).py" 0
+    python -m prosperity4bt "../trader (4).py" 0
+
+  ── Run a single specific day only:
+
+    python -m prosperity4bt "../trader (4).py" 0--1   ← day -1 only
+    python -m prosperity4bt "../trader (4).py" 0--2   ← day -2 only
+
+  Note the double dash before the negative day number (0--1 means round 0, day -1).
+
+  ── Useful optional flags:
+
+    --print          Print the algorithm's own log output to the terminal as it runs.
+                     Useful for debugging (each trader writes diagnostic logs).
+
+    --no-vis         Skip opening the visualizer webpage when done.
+                     Use this if you just want the text PnL summary.
+
+    --match-trades all
+                     More generous order matching: fills against any market trade
+                     at a price equal to or better than your quote.
+                     Default is "worse" (only fills against trades with strictly
+                     better prices). Using "all" typically gives higher PnL.
+
+  Example with flags:
+
+    python -m prosperity4bt "../trader (4).py" 0 --print --match-trades all
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 4 — READING THE RESULTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  After the backtest finishes, two things happen automatically:
+
+  1. TERMINAL SUMMARY
+     The final PnL for each product and each day is printed to your terminal.
+     Look for lines like:
+
+       EMERALDS  Day -1: 12,450   Day -2: 11,820   Total: 24,270
+       TOMATOES  Day -1:  3,210   Day -2:  4,560   Total:  7,770
+       Combined total:                              Total: 32,040
+
+  2. LOG FILE (saved automatically)
+     A timestamped .log file is written to:
+       imc-prosperity-4-backtester/backtests/<timestamp>.log
+
+     This file contains the full tick-by-tick trading activity log,
+     which can be loaded into the online visualizer for detailed analysis.
+
+  3. ONLINE VISUALIZER (opens automatically in your browser)
+     The backtester opens the log file in the Prosperity visualizer at:
+       https://kevin-fu1.github.io/imc-prosperity-4-visualizer/
+     You can inspect PnL curves, position charts, and order fills there.
+     To skip this, use the --no-vis flag.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  QUICK REFERENCE — COMPARE ALL FOUR STRATEGIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Run these four commands back to back to compare total PnL across versions.
+  (Run from inside imc-prosperity-4-backtester/)
+
+    python -m prosperity4bt "../trader (1).py" 0 --no-vis
+    python -m prosperity4bt "../trader (2).py" 0 --no-vis
+    python -m prosperity4bt "../trader (3).py" 0 --no-vis
+    python -m prosperity4bt "../trader (4).py" 0 --no-vis
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Problem: ModuleNotFoundError: No module named 'datamodel'
+  Fix:     Set PYTHONPATH as described in Step 2 above.
+
+  Problem: ModuleNotFoundError: No module named 'jsonpickle'
+  Fix:     pip install jsonpickle
+
+  Problem: ModuleNotFoundError: No module named 'typer'
+  Fix:     pip install typer
+
+  Problem: FileNotFoundError on the trader .py file
+  Fix:     Make sure you are running the command from inside the
+           imc-prosperity-4-backtester/ directory, and that the path
+           uses "../trader (X).py" with the quotes around the filename
+           (the spaces in the filename require quoting).
+
+  Problem: The visualizer page opens but shows no data
+  Fix:     The log file may not have been uploaded correctly. Try dragging
+           the .log file from backtests/ folder directly onto the visualizer
+           page at https://kevin-fu1.github.io/imc-prosperity-4-visualizer/
