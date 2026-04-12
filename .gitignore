@@ -11,3 +11,6 @@ __pycache__/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+# Kaggle learntools source (has its own git repo)
+learntools-src/
