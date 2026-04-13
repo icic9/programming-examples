@@ -14,3 +14,18 @@ __pycache__/
 
 # Kaggle learntools source (has its own git repo)
 learntools-src/
+
+# Secrets and local environment config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local tool state
+.claude/
+
+# Generated project outputs
+Smart Money Trades Notifier/output/

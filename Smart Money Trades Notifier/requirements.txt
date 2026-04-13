@@ -1,0 +1,7 @@
+requests
+pandas
+pdfplumber
+python-dotenv
+lxml
+beautifulsoup4
+openpyxl

@@ -1,0 +1,17 @@
+{
+  "_comment": "Trump's non-DJT holdings from OGE Form 278e (annual financial disclosure).",
+  "_comment2": "DJT stake is fetched automatically from SEC EDGAR Form 4 — do NOT add DJT here.",
+  "_comment3": "Update 'date' and 'holdings' when a new annual OGE disclosure is published.",
+  "_comment4": "amount = estimated midpoint of the OGE dollar range in USD.",
+  "date": "2024-05-15",
+  "holdings": [
+    {"ticker": "AAPL", "company": "Apple Inc",                      "amount": 3000000},
+    {"ticker": "AMZN", "company": "Amazon.com Inc",                 "amount": 3000000},
+    {"ticker": "NVDA", "company": "NVIDIA Corp",                    "amount": 3000000},
+    {"ticker": "GOOGL","company": "Alphabet Inc",                   "amount": 750000},
+    {"ticker": "MSFT", "company": "Microsoft Corp",                 "amount": 750000},
+    {"ticker": "AVGO", "company": "Broadcom Inc",                   "amount": 375000},
+    {"ticker": "BRK.B","company": "Berkshire Hathaway",             "amount": 375000},
+    {"ticker": "TSLA", "company": "Tesla Inc",                      "amount": 175000}
+  ]
+}
