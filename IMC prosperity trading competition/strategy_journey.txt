@@ -1,0 +1,1029 @@
+My Trading Strategy Journey — IMC Prosperity 4 (Tutorial Round)
+================================================================
+Products traded: EMERALDS (stationary) | TOMATOES (drifting, unknown fair value)
+
+This document walks through the four iterations of my trading algorithm, describing
+the thought process, the improvements, and the lessons learned at each stage.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TRADER (1) — First Attempt: ML-Inspired Heuristics
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+My starting point was intuition: I asked myself what signals I would use if I were
+trying to predict short-term price movements in a fast-moving market.
+
+For EMERALDS, I knew the fair value was around 10,000 (visible from the data), so
+the strategy was straightforward: make markets around that price, take any order
+that was clearly mispriced, and skew my passive quotes against my inventory to
+avoid accumulating too much directional risk.
+
+For TOMATOES, the fair value was unknown and drifting, so I assembled three signals:
+
+  1. Exponential Moving Average (EMA) as my fair value estimate.
+     I replaced the naive simple moving average (SMA) with an EMA because I knew
+     that for drifting price series, recent observations should matter more than old
+     ones. The SMA weights every point in the window equally — that seemed wrong
+     intuitively. I chose alpha = 0.25 by feel.
+
+  2. Linear regression slope to capture trending behaviour.
+     I ran an OLS regression of recent midprices against a time index over a rolling
+     30-tick window. If the slope is positive, the price is trending up, so I raise
+     my fair value estimate slightly; if negative, I lower it. I project this slope
+     forward by 3 ticks (the "horizon") and blend it into my fair value.
+
+  3. Order Book Imbalance (OBI) as a short-term directional signal.
+     OBI = (total bid volume − total ask volume) / (total bid + total ask volume).
+     A positive OBI means more buy pressure on the book, suggesting prices will rise;
+     negative means sell pressure. I nudge my passive quote midpoint in that direction.
+
+  4. Inventory skew to manage position risk.
+     If I am long, I lower my bid and ask prices slightly to make selling more
+     attractive; if short, I raise them. This prevents runaway inventory accumulation.
+
+The general structure — aggressive phase (take mispriced orders) followed by passive
+phase (post limit orders around fair value) — was established here and kept in all
+subsequent versions.
+
+What I was not happy with: every parameter (alpha, window, weights) was a guess.
+I had no principled way to know if alpha=0.25 was better or worse than 0.3. The
+linear regression slope added noise for a process that might be a random walk.
+I had no formal understanding of what statistical process TOMATOES actually followed.
+This motivated a complete rethink.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TRADER (2) — Econometric Foundation: Let the Data Speak
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+I went back to first principles and applied the econometric tools I had studied in
+my LSE Metrics II course (Slide Packs #3 and #6) directly to the price data.
+
+For EMERALDS:
+  I ran a Dickey-Fuller (DF) unit root test on the price series. The t-statistic
+  came out at approximately -97, which is an overwhelming rejection of the unit
+  root hypothesis. This means EMERALDS is strongly stationary — it reverts to a
+  fixed mean. I then checked the autocorrelation function (ACF) of the levels and
+  found ACF(1) ≈ 0.03, essentially zero. This tells me the series is white noise
+  around its mean of 10,000. The implication for trading is clear: the fair value
+  is 10,000 with near-certainty. There is no point building a complex forecasting
+  model; I just need to make markets around 10,000 as efficiently as possible.
+
+For TOMATOES:
+  The ACF of the levels showed ACF(1) ≈ 0.99, a classic near-unit-root signature —
+  prices are highly persistent and drift over time. I then differenced the series
+  (computed ΔY_t = Y_t − Y_{t-1}) and examined the ACF of the differences. I found:
+    — ACF(1) of ΔY_t ≈ −0.41   (significant negative autocorrelation at lag 1)
+    — ACF(2), ACF(3), ... ≈ 0   (cuts off sharply after lag 1)
+  This ACF pattern — one significant lag then cutoff — is the textbook signature of
+  a Moving Average process of order 1 in the differences. In other words, TOMATOES
+  follows an ARIMA(0,1,1) process:
+      ΔY_t = ε_t + θ · ε_{t-1}
+  where θ ≈ −0.55 (estimated from ACF(1): θ ≈ ACF(1) / (1 + ACF(1)^2 ≈ ...) ).
+
+  The critical insight: for an ARIMA(0,1,1) process, the theoretically optimal
+  1-step-ahead forecast is an Exponentially Weighted Moving Average with smoothing
+  parameter α = 1 + θ ≈ 1 − 0.55 = 0.45 (I used 0.43 after more careful fitting).
+  This is not an arbitrary choice — it is derived from the Kalman filter / EWMA
+  equivalence for MA(1) processes. I verified empirically that EMA(0.43) reduces
+  forecast MSE by approximately 53% compared to SMA(20).
+
+I also introduced the microprice as a better fair-value input than the raw midprice:
+  microprice = (best_bid × ask_vol + best_ask × bid_vol) / (bid_vol + ask_vol)
+This volume-weights the two sides of the book. If the ask side is heavier, the
+microprice sits closer to the ask — a more accurate reflection of where the market
+is likely to trade next.
+
+This version also introduced inventory skewing and adaptive spread widening based
+on rolling volatility estimates. However, in the implementation I introduced four
+subtle bugs that reduced performance — these were identified and fixed in v3.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TRADER (3) — Systematic Debugging: Rigour in Execution
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Even a theoretically sound strategy fails if it is implemented incorrectly. After
+backtesting v2 and studying the logs carefully, I identified four bugs:
+
+  BUG 1 — Aggressive fills used the skewed fair value for TOMATOES.
+  At maximum inventory (position = 80), a skew of 0.15 per unit = 12 ticks.
+  The aggressive threshold was checking: is this ask below (fair − 12)?
+  This means I was refusing to buy at prices like fair − 11, fair − 5, fair − 1,
+  all of which are genuinely profitable. I was leaving money on the table.
+  FIX: aggressive fills always compare against the raw (unskewed) EMA fair value.
+
+  BUG 2 — Inventory skew coefficient was too large for TOMATOES (0.15 per unit).
+  At the position limit of 80, this produced 12 ticks of skew. The typical spread
+  was only 4 ticks total. This meant my passive sell was priced 10 ticks below fair
+  — I was gifting edge to counterparties. The skew should be small enough to stay
+  comfortably inside the spread.
+  FIX: TOMATO_SKEW reduced from 0.15 to 0.04 per unit → max 3.2 ticks at limit.
+
+  BUG 3 — The adaptive spread was uncapped, growing very wide in volatile periods.
+  With vol_adj up to 2 and inv_adj up to 2, the half-spread could reach 6 ticks
+  (full spread 12 ticks). This was wider than the entire visible order book, meaning
+  my passive quotes never got filled. The spread was supposed to adapt, not collapse.
+  FIX: hard cap on half-spread at 4 ticks.
+
+  BUG 4 — Aggressive fills for EMERALDS also used the skewed fair value.
+  EMERALDS fair value is known with certainty to be 10,000. There is no reason to
+  refuse buying at 9,999 just because I happen to be long at that moment. The skew
+  on aggressive fills was causing me to miss profitable arbitrage opportunities.
+  FIX: aggressive EMERALDS fills always use raw fair = 10,000; skew only applied
+  to passive quote prices.
+
+The core principle I established: the aggressive phase and passive phase must be
+decoupled. Aggressive fills capture certain edge (mispriced orders) and should
+never be skewed. Passive quotes manage inventory risk and can be skewed. Conflating
+the two costs real PnL.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TRADER (4) — Final: Market Microstructure Innovation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+With a correct, theory-grounded implementation in place, I turned to the question
+of how to compete more effectively against other market participants. I introduced
+two new ideas from market microstructure theory:
+
+  INNOVATION 1 — Book-Adaptive Pennying (queue-jumping).
+
+  Instead of posting passive quotes at a fixed spread from fair value (e.g., always
+  at fair ± 2), I read the actual live order book each tick to see where competitor
+  bots are resting their passive orders. I then post 1 tick inside their best price.
+
+  For example, if the best competing bid is at 9,997 and fair is 10,000:
+    — A fixed ±2 strategy posts at 9,998 (same or worse)
+    — My pennying strategy posts at 9,998 (1 tick above 9,997) to gain queue priority
+
+  This is observation-driven: zero hyperparameters, zero risk of overfitting to
+  historical data. It purely reacts to the current market structure. The only
+  constraints are hard floors/ceilings so I never post at or across fair value
+  (which would eliminate my edge). I applied this to both EMERALDS and TOMATOES.
+
+  INNOVATION 2 — Two-Level Passive Layering.
+
+  Instead of posting my entire remaining capacity at a single price level, I split it:
+    Layer 1: 60% at the penny price      → tight price, queue priority, smaller edge
+    Layer 2: 40% at penny price ± 1 tick → one tick further, larger edge per fill
+
+  The motivation: if competitor bots tighten their spread (post at ±1 instead of ±2),
+  a pure penny strategy suffers badly — you end up at fair ± 1 with zero edge.
+  I simulated this scenario:
+    — Fixed ±2 strategy when bots penny to ±1: near-zero fills (catastrophic).
+    — Pure penny strategy when bots at ±1: posts at fair ± 0, negative edge.
+    — Two-level strategy: layer 2 still has meaningful edge regardless of what bots do.
+  The two-level split is more robust across the range of possible competitor behaviours.
+  It sacrifices some PnL in the best case but avoids catastrophic failure in edge cases.
+
+  The final version also carries over all bug fixes and econometric foundations from v3:
+    — Aggressive / passive separation (raw fair for fills, skewed fair for quotes)
+    — EMA(0.43) of microprice as the ARIMA(0,1,1)-optimal forecast for TOMATOES
+    — Inventory skew on passive quotes only (max 2 ticks at position limit)
+    — Spread widens by 1 tick when rolling volatility σ(ΔY) > 2.5
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  KEY LESSONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Understand your data before choosing a model. Running formal statistical tests
+     (DF test, ACF analysis) told me exactly what kind of process each product
+     followed — and therefore exactly what the optimal forecasting strategy was.
+     Intuition-based model selection (v1) leaves parameters ungrounded.
+
+  2. Separate concerns in implementation. Aggressive fills and passive quoting serve
+     different purposes; mixing them (e.g., applying inventory skew to aggressive
+     fills) causes silent bugs that are hard to detect without careful log analysis.
+
+  3. Small bugs, large PnL impact. Bug 1 alone (wrong threshold for aggressive fills)
+     was causing me to miss fills at prices that were genuinely profitable. These
+     kinds of implementation errors do not throw exceptions — they just quietly reduce
+     performance, which makes them particularly dangerous.
+
+  4. Robustness over optimisation. The two-level layering in v4 does not maximise
+     PnL in any single scenario; it minimises the worst case across scenarios. In
+     live competition where competitor behaviour is unknown, this robustness matters
+     more than squeezing out the last basis point under idealistic assumptions.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TRADER (5) — Momentum Signals: Dual-EMA and Urgency Skew
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+With v4 establishing a correct and well-structured baseline, I focused on
+handling trending markets better. My backtests on both training days revealed
+a common failure mode: in a prolonged downtrend, the single EMA(α=0.43) lags
+behind the falling price. My passive buy orders would fill repeatedly at prices
+above the true current fair value, building long inventory precisely when I
+should have been reducing it.
+
+Before settling on my final approach, I tested and discarded three candidates:
+
+  DISCARDED — At-fair EMERALDS aggressive fills.
+  I considered buying at asks priced exactly at fair (= 10,000) rather than
+  strictly below it. The logic seemed simple: fill at 10,000, sell passively
+  at 10,007 = +7 ticks. But this ignores opportunity cost: the capacity used
+  for that at-fair fill could instead complete a passive round-trip (buy at
+  9,993, sell at 10,007) = +14 ticks. Net: -7 ticks per unit of displaced
+  capacity. Backtesting confirmed: -245 EMERALDS PnL over 2 training days.
+
+  DISCARDED — Full-book microprice.
+  Instead of using only the top level of the order book (best bid/ask volumes)
+  for the microprice, I tried weighting all visible levels. The result was
+  noisier — on 3.6% of ticks the full-book microprice differed from the level-1
+  version by more than 1 tick, occasionally misdirecting the EMA. Across both
+  training days, this caused a -160 PnL baseline regression.
+
+  DISCARDED — 1-tick EMA velocity.
+  The simplest momentum signal: ema_velocity = EMA_t − EMA_{t-1}. It improved
+  performance on the trending day (+138 TOMATOES) but hurt performance on the
+  flat/volatile day (-131 TOMATOES). Net: roughly neutral. The problem is that
+  1-tick differences in EMA are dominated by noise — they fire on every single
+  tick even when there is no genuine trend.
+
+The retained innovations:
+
+  INNOVATION 3 — Dual-EMA Momentum Signal.
+  Instead of a 1-tick velocity, I run two EMAs simultaneously:
+    ema_fast (α=0.43): already the fair-value estimate — unchanged from v4.
+    ema_slow (α=0.10): a slower tracker with effective memory of ~10 ticks.
+  The trend signal = ema_fast − ema_slow.
+
+  Why this is better than 1-tick velocity:
+    In a sustained downtrend, ema_fast gradually pulls below ema_slow over
+    20–30 ticks, building a persistent and growing negative signal. In a flat
+    or noisy market, both EMAs orbit the same level and the signal stays near
+    zero. The dual-EMA signal only fires when there is a genuine and sustained
+    trend — exactly when it should.
+
+  I apply this via a "biased position":
+    biased_pos = position − MOMENTUM_BIAS × trend_signal
+    where MOMENTUM_BIAS = 5 (position units per tick of trend signal).
+
+    Example — Day -2 downtrend (signal grows to −10 over 40 ticks):
+      biased_pos = position + 50.
+      This inflates our effective inventory, pushing us deeper into the urgency
+      zone and triggering heavier skew. Our passive quotes shift down in the
+      direction of the trend — selling lower and buying lower, reducing
+      against-trend inventory accumulation.
+
+    Flat / volatile day: signal stays near 0 → biased_pos ≈ position → PnL
+      essentially identical to v4. No spurious momentum bias.
+
+  INNOVATION 4 — Urgency Position Skew.
+  When |biased_pos| exceeds 70% of the position limit (56 units), the base
+  inventory skew is multiplied by 2×. In a strong downtrend with a real long
+  position, the momentum bias and the urgency multiplier compound: we get very
+  aggressive downward quote skewing when we need it most. This prevents quietly
+  drifting into the position limit without reacting.
+
+  INNOVATION 5 — Exponential Moving Variance.
+  The rolling-list variance estimate from v4 (20-element window) is replaced
+  with a recursive exponential formula:
+    emv_t = 0.15 × diff² + 0.85 × emv_{t-1}
+  This has an effective memory of ~7 ticks (versus 20), detecting volatility
+  regime changes faster. It also eliminates the list from persistent state,
+  simplifying the data structure. In practice the vol threshold (2.5 ticks) is
+  almost never crossed on tutorial round data, so the main benefit here is
+  cleaner code rather than a measurable PnL improvement.
+
+EMERALDS: unchanged from v4 throughout.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  TRADER (6) — Trend-Carry: Embedding the Signal in Fair Value Itself
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Reviewing v5, I noticed a structural inconsistency: the momentum signal
+correctly adjusted the passive quote skew, but it had no effect on the fair
+value anchor itself. In a downtrend, the aggressive threshold and the passive
+quote anchor were still the raw EMA — which by design lags the true current
+price. The signal was telling me "price is falling" but I was still buying
+aggressively up to the lagged, too-high EMA. This version corrects that.
+
+  INNOVATION 6 — Trend-Carry Fair Value Adjustment.
+  I add a small fraction of the trend signal directly into the fair value:
+    forecast_ema = ema + TOMATO_TREND_CARRY × trend_signal
+    where TOMATO_TREND_CARRY = 0.25 (25% of the signal).
+
+  This forecast_ema is used as the threshold for aggressive fills and as the
+  anchor for passive quotes (before inventory skew is applied):
+    Downtrend (signal = −10): forecast_ema = ema − 2.5 ticks.
+      We stop buying at asks we would have taken in v5 — those slightly above
+      the momentum-adjusted fair value. Passive quotes also shift down with
+      the trend, following the price rather than lagging behind it.
+    Uptrend: symmetric — forecast_ema rises, making us more willing to buy
+      near the rising price and less willing to sell into it.
+
+  I also reduced the slow EMA alpha from 0.10 (v5) to 0.06 (v6). At 0.10,
+  the slow EMA reacted to intra-day noise on the flat training day, generating
+  spurious trend signals. At 0.06 (effective memory ≈ 17 ticks), it only
+  reacts to genuine, multi-tick sustained trends.
+
+  INNOVATION 7 — Against-Trend Passive Capacity Throttling.
+  Even with the carry adjustment, I was still advertising full passive buy
+  capacity in a downtrend. If those passive bids fill, I accumulate long
+  inventory against a trend I can observe directly. There is no good reason
+  to offer the full book depth in the losing direction.
+
+  Solution: when |trend_signal| exceeds a threshold (1.5 ticks), reduce
+  passive size in the against-trend direction to 65% of normal:
+    Downtrend (signal < −1.5): cap passive buy capacity to 65%.
+    Uptrend (signal > +1.5): cap passive sell capacity to 65%.
+
+  The 35% reduction meaningfully reduces adverse inventory accumulation
+  while keeping 65% of spread income available in case the trend reverses
+  suddenly. A complete shutdown would be too aggressive: the trend signal
+  has magnitude ~2–10 ticks in practice, and reversals happen without warning.
+
+EMERALDS: unchanged from v4/v5 throughout.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  KEY LESSONS (updated)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1–4. (See above, unchanged.)
+
+  5. Apply directional signals consistently throughout the strategy, not
+     just at one layer. In v5, the momentum signal adjusted the passive skew
+     but left the aggressive threshold and fair-value anchor untouched. The
+     result was an internal inconsistency: the signal said "price is falling"
+     but the fair value said "fair is where the lagged EMA is." v6 fixed this
+     by carrying the signal into forecast_ema, which is then used everywhere.
+
+  6. Control capacity, not just price. A good strategy prices quotes correctly
+     and also decides how much it is willing to trade in each direction. Against-
+     trend throttling in v6 reduces adverse inventory accumulation by cutting
+     passive offer depth on the losing side — without abandoning the spread-
+     earning strategy that generates the bulk of PnL. Sizing is risk management.
+
+  7. Test and discard explicitly. v5 documented three discarded approaches
+     (at-fair fills, full-book microprice, 1-tick velocity). Keeping a record
+     of what failed — and why — prevents revisiting the same dead ends and
+     clarifies exactly what each retained change is contributing.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ROUND 1 — NEW PRODUCTS, NEW DRIFTS: PEPPER & OSMIUM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After the tutorial round I moved into Round 1, which replaced
+EMERALDS / TOMATOES with two new instruments. Each had its own
+statistical personality, and much of the R1 journey was working out
+how to express both personalities inside a single coherent engine.
+
+  INTARIAN_PEPPER_ROOT  (PEPPER, position limit ±80)
+    An ARIMA(0,1,1) process with a small but persistent positive drift
+    of roughly +0.10 ticks per timestamp. Over a full 10,000-tick day
+    this compounds to +1,000 ticks of directional movement. This is
+    not noise — it is deterministic carry alpha. Whatever I did here,
+    I had to be riding this drift, not fighting it.
+
+  ASH_COATED_OSMIUM  (OSMIUM, position limit ±80)
+    An ARIMA(0,1,1) process with essentially zero drift. Mean ≈ 10,000,
+    intra-day std ≈ 5, range-bound and mean-reverting.
+
+Given the two very different generating processes, each product needed
+its own fair-value framework. PEPPER wants prediction (forecast ahead
+of the EMA lag, ride the carry); OSMIUM wants robust estimation (a
+slow, noise-insensitive level). Pushing these two goals through a
+common infrastructure — and keeping them from stepping on each other —
+was the dominant engineering problem of the round.
+
+The R1 journey spans 36 distinct iterations. That is more than most
+people would realistically write for a single round, and I should be
+honest that many were tiny parameter sweeps saved as new files to
+preserve a clean diff history. Grouped by conceptual epoch the 36
+files reduce to five phases.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R1 EPOCH A — ADAPTING THE TUTORIAL FRAMEWORK (v1–v6)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+R1 v1 is a direct port of Tutorial v6, retuned with R1-specific ACF
+analysis:
+
+  PEPPER:
+    ACF(1) of ΔY_t ≈ −0.501 (vs. −0.57 on Tutorial TOMATOES).
+    → optimal EMA α ≈ 0.50 (vs. 0.43 on TOMATOES).
+    Slow EMA α = 0.06, trend-carry weight = 0.25 (inherited from v6).
+    Against-trend passive capacity cap = 0.55 (throttle sells harder
+    in an uptrend, since PEPPER is always uptrending).
+    MOMENTUM_BIAS = 40, scaled up from Tutorial's 5 to match PEPPER's
+    ≈ 12-tick spread (TOMATOES had ≈ 2 ticks, so position units per
+    tick of signal need to be roughly 6× larger).
+
+  OSMIUM:
+    EMA α = 0.50 of the microprice, no fixed anchor. Working hypothesis
+    was "ARIMA(0,1,1) with zero drift" — not stationary in level
+    (there IS a unit root) but no directional bias either. The
+    conditional mean IS the current EMA.
+    Inventory skew quantised to ±1 tick at the position limit.
+    No trend signal, no momentum bias, no throttling.
+
+v2–v6 are a parameter sweep. By v6 the PEPPER EMA pair had slowed
+substantially (α_fast 0.50 → 0.28, α_slow 0.06 → 0.015) and the
+inventory skew had shrunk (0.025 → 0.015 per unit), with the urgency
+multiplier raised (×2 → ×3). The intuition: on R1 data, chasing the
+local mid with α = 0.50 over-reacted to tick noise. A slower fair
+rides the drift smoothly; a smaller skew stops the bot from fading
+its own carry. The urgency multiplier stays dormant until the
+position is truly loaded (|pos| > 56), at which point it kicks in
+hard.
+
+I also dropped the two-level layering splits (L1_FRAC = 0.6 /
+L2_FRAC = 0.4) down to a single price (L1_FRAC = 1.0). Tutorial logic
+assumed competitor spreads might tighten to ±1; on R1 data,
+competitor spreads were stable enough that a single penny price
+beat the two-level split. The two-level logic was genuine insurance
+that R1 data simply did not need to cash in.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R1 EPOCH B — DRIFT CLOCKS AND WALL-MID (v7–v14)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The structural weakness of an EMA fair in a drifting market is lag:
+by the time the EMA has risen to where prices are now, prices have
+already moved further up. Epoch B introduced two ways to hedge that
+lag.
+
+  INNOVATION 8 — The PEPPER drift clock.
+
+  If PEPPER drifts deterministically at ≈ +0.10 ticks per timestamp,
+  I should not have to infer that drift from noisy price data every
+  tick. I can anchor to the first valid price and linearly extrapolate:
+
+      clock_fair_t = start_price + 0.10 × (t − t_start)
+
+  The actual fair then becomes a blend:
+
+      forecast_ema = 0.70 × ema_fair + 0.30 × clock_fair
+
+  The blend weights matter. 100% clock is dangerous: if the regime
+  changes, the clock becomes a lie. 100% EMA lags. 70/30 hedges model
+  risk while still capturing most of the predictive benefit of having
+  a deterministic drift model.
+
+  INNOVATION 9 — Wall-mid instead of top-of-book mid.
+
+  Top-of-book quotes can be thin — a single unit at 10,001 is not the
+  market. A deep 30-unit quote at 9,998 is closer to where real
+  business is being done. So I started computing fair from quotes
+  with volume ≥ MM_VOLUME (= 18 for PEPPER, the typical market-maker
+  size):
+
+      wall_mid = average(prices where volume ≥ MM_VOLUME)
+
+  When no large quote is present, I fall back to the plain microprice.
+  This made both the EMA and the short-window OLS slope estimates
+  substantially less noisy — the biggest unit-volume outliers in the
+  order book are often spoof / post-and-cancel activity that shouldn't
+  move my fair.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R1 EPOCH C — PREDICTIVE MODELS AND THE FIRST HARD ANCHOR (v15–v24)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In Epoch C I pushed harder on prediction — both for PEPPER (where
+drift is the alpha) and for OSMIUM (where the question is what level
+to revert to).
+
+  INNOVATION 10 — Short-window OLS for PEPPER.
+
+  Instead of a hand-tuned EMA alpha, I regressed the last 6 wall-mids
+  against time (a 6-tick OLS) to get a local slope estimate and
+  blended:
+
+      predicted = 0.70 × ols_fit + 0.30 × clock_fair
+
+  The 6-tick window is deliberately short: noise at 6 ticks is still
+  ±2, but the local slope is a close second-best proxy for the clock
+  drift without requiring a hardcoded +0.10 constant.
+
+  INNOVATION 11 (EVENTUALLY REVERSED) — Hard OSMIUM anchor at 10,000.
+
+  OSMIUM's empirical mean across training days was ≈ 10,000.20 with
+  std ≈ 5 ticks. If the true generating process really is a
+  stationary OU / zero-drift RW around 10,000, then the best fair
+  value is not the EMA (which chases noise) but the constant:
+
+      OSMIUM_FAIR = 10,000
+
+  Aggressive buys at asks ≤ 9,999; aggressive sells at bids ≥ 10,001.
+  Locally this was great. It beat the EMA by a comfortable margin and
+  I kept it through most of Epoch C and all of Epoch D. Only in Epoch
+  E did I learn that this was the wrong long-run call — see below.
+
+  INNOVATION 12 — Toxicity modelling for OSMIUM.
+
+  Market-making OSMIUM at a fixed anchor is tempting until the book
+  gets toxic: a heavy bid side or a one-sided microprice shift
+  usually means one of my passive quotes is about to get
+  adverse-selected. I modelled toxicity as:
+
+      toxicity = TOX_OBI_WEIGHT × OBI
+               + TOX_MICRO_WEIGHT × (microprice − fair)
+
+  When toxicity on one side crossed a threshold, I scaled that side's
+  passive size down by a fixed multiplier (≈ ×0.60). The idea: keep
+  spread income on the clean side, stop funding adverse selection on
+  the toxic side. I also introduced inventory regimes (NEUTRAL,
+  LOADED, STRESSED) so that, when the position was already loaded,
+  toxicity scaling got even harsher on the already-loaded side.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R1 EPOCH D — CARRY CORE AND FLOW (v25–v30)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Epoch D is the single largest change of mindset across all R1
+versions. Up to v24 I was market-making PEPPER. From v25 I was
+HOLDING PEPPER.
+
+  INNOVATION 13 — Carry core and trading sleeve.
+
+  PEPPER drifts up at +0.10/tick ≈ +1,000 ticks per day. If I simply
+  hold 80 units for a whole day, the directional carry alone is:
+
+      80 units × 1,000 ticks = +80,000 PnL
+
+  That dwarfs anything spread-capture on PEPPER can realistically do.
+  The risk is that symmetric market-making logic, by design,
+  passively sells when the position is long — it is fading the very
+  carry that is paying me. The solution: split PEPPER into two
+  notional books.
+
+    Carry core (68 units): strategic position. Do not sell except on
+      a clear regime break. Refill proactively when the core is
+      short of target (PEPPER_CORE_BID_EDGE = −1: willing to pay
+      fair − 1 to top up the core).
+
+    Trading sleeve (12 units): the rest of the position limit.
+      Recycle normally against the spread, but only sell into fills
+      at fair + 2 ticks or better (PEPPER_SLEEVE_SELL_EDGE = +2).
+      Don't give up sleeve capacity for tiny edges — the sleeve is
+      the spread-capture layer.
+
+  This is deliberately economics language: I had two different
+  "assets" (carry alpha and spread alpha) and I built two different
+  policies for managing them. Symmetric market-making is right when
+  the fair value is a martingale. When there is carry, asymmetric
+  inventory policy dominates.
+
+  INNOVATION 14 — Flow signal for execution pressure.
+
+  Separately from the dual-EMA trend signal (which drives fair
+  value), I started tracking the sign and magnitude of recent
+  market trades — a buy-sell imbalance EMA with α = 0.25 and weight
+  1.15 in the take threshold. A burst of market buys means other
+  traders are aggressing upward; I should lower my take threshold
+  on the ask side to fill before price has fully moved. Flow is a
+  short-horizon execution hint, explicitly separated from the
+  longer-horizon trend signal driving fair value.
+
+  INNOVATION 15 — Regime hysteresis and adverse-carry confirmation.
+
+  The risk of running a 68-unit carry core is that if the regime
+  actually breaks, I ride that position straight into a loss. I
+  needed a break detector that wouldn't fire on noise.
+
+  Three signals, all must confirm, multiple ticks in a row:
+
+      trend_signal < BREAK_TREND           (ema − ema_slow < −4)
+      AND clock_gap < BREAK_CLOCK_GAP      (empirical − clock < −25)
+      AND counter ≥ BREAK_CONFIRM          (3 ticks in a row)
+
+  Asymmetric thresholds: 3 ticks to declare a break, 2 ticks to
+  declare a recovery. Breaks require skepticism (carry is the base
+  case); recoveries can be entered more eagerly. This is the same
+  philosophy as a Bayesian prior that starts biased toward carry —
+  evidence has to clear a higher bar to overturn the default.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R1 EPOCH E — ROBUSTNESS VS. BACKTEST OVERFIT (v31–v36)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This epoch taught me the single most important lesson of the whole
+competition: a local PnL improvement is not a real improvement
+unless it generalises.
+
+  v31 (the submitted R1 version) consolidates everything from Epoch
+  D and adds one conceptual piece:
+
+    INNOVATION 16 — Learned range anchor for OSMIUM.
+
+    Instead of the hardcoded OSMIUM_FAIR = 10,000 from Epoch C, v31
+    uses a blend of three book-relative signals:
+
+        osmium_fair = 0.46 × wall_mid
+                    + 0.20 × microprice
+                    + 0.34 × learned_range_anchor
+
+    The learned_range_anchor is a slow EMA of recent mid extrema. It
+    converges to whatever level OSMIUM is actually trading at,
+    without any hardcoded constant.
+
+    This was strictly WORSE than the static anchor locally — by about
+    424 PnL over two training days. I kept it anyway because I was
+    not confident the official OSMIUM series would be centred at
+    exactly 10,000, and I wasn't willing to put that constant into
+    production without evidence.
+
+  v31 also contains a final structural detail worth noting: the
+  short-window OLS slope is still computed, but its weight in the
+  fair-value blend is set to PEPPER_SLOPE_WEIGHT = 0.0. I kept it
+  as a DIAGNOSTIC input — useful for the regime break guards and
+  for log inspection — but took it out of the fair-value formula.
+  An earlier version (v26) had folded the OLS slope directly into
+  the fair and looked robust in backtests while quietly costing
+  carry PnL. Signals have to be separated by role.
+
+  v32–v36 (NOT SUBMITTED) revisited the anchor choice. I put the
+  10,000 anchor back in as a 0.16-weight "Bayesian prior":
+
+      osmium_fair = 0.46 × wall_mid
+                  + 0.20 × microprice
+                  + 0.18 × learned_range_anchor
+                  + 0.16 × 10000
+
+  Locally this recovered the +424 PnL. I backtested it on the
+  official IMC engine during the late submission window.
+
+  It was WORSE officially than v31.
+
+  The lesson is blunt. A training-data mean is not a law of nature.
+  Hardcoded price anchors embed an absolute assumption about the
+  generating distribution, and the official environment does not
+  necessarily match. Book-relative signals (wall_mid, microprice,
+  learned anchor) all rescale naturally if the level drifts. A
+  hardcoded 10,000 biases the fair toward the wrong target for the
+  entire session if the actual level is somewhere else — and worse,
+  it does so INVISIBLY, because every number in the formula still
+  looks plausible.
+
+  I submitted v31. It finished 153rd out of 5,707 teams.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ROUND 2 — MAF MECHANICS, RANDOMISED VISIBILITY, REGIME STABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Round 2 kept the same two products but added two mechanical twists
+that the R1 engine did not have:
+
+  MARKET ACCESS FEE (MAF).
+    Every algorithm submits a single integer bid via a new
+    trader.bid() method. The top 50% of MAF bidders see 100% of each
+    order book on every submission; everyone else sees a random 80%
+    sample of each book. Losing MAF bidders pay nothing — the "fee"
+    is only the auction value of being in the winning half, not a
+    real cash outflow. So MAF is effectively a free auction for
+    better information.
+
+  80% QUOTE RANDOMISATION.
+    Each submission that loses MAF sees a freshly random 80% of the
+    order book. This means two consecutive submissions can disagree
+    about what the best bid even is, purely because of the
+    randomisation mask. The R1 engine never did this, so R1 v31
+    had no special handling for a one-sided book.
+
+On top of that, the same products shifted in a predictable way:
+
+  PEPPER is still +1,000 ticks/day drift, but each day STARTS at
+    roughly +1,000 ticks above the previous one (day −1 ≈ 11,001,
+    day 0 ≈ 12,000, day 1 ≈ 13,000). The intra-day drift structure
+    is unchanged.
+
+  OSMIUM is still ≈ stationary within a day, but drifts up roughly
+    +8 ticks per day across sessions, with a consistent 16-tick near
+    spread (e.g. 10,001 / 10,017 on day 1).
+
+R2 was therefore less about new product models and more about two
+things: exploiting the MAF auction, and making sure the R1 framework
+didn't silently break under the randomisation mask.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R2 EPOCH A — FOUNDATION ON TOP OF R1 v31 (v0–v1)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+R2 v0 is R1 v31 plus the minimum needed to react to R2 mechanics.
+
+  INNOVATION 17 — Fixed MAF bid at 200.
+
+  I set trader.bid() = 200 as a hard-coded constant. From the R2
+  briefing I inferred 200 was comfortably above the likely median MAF
+  bid. Since losing costs nothing, slightly over-paying for the 25%
+  visibility bonus is cheap insurance. I never dynamically adjusted
+  it — not because I thought 200 was optimal, but because the
+  information needed to calibrate dynamically (a stable estimate of
+  the median competitor MAF) never appeared in-game.
+
+  INNOVATION 18 — OSMIUM range-directional lean.
+
+  OSMIUM is range-bound, so mean-reversion at the extremes is a real
+  edge. Rather than passively market-making the same way everywhere,
+  I compute a range_factor ∈ [−1, +1] describing where the current
+  mid sits in the recently observed range, and shift my reservation
+  price by OSMIUM_RANGE_SKEW × range_factor = 1.8 × range_factor
+  ticks.
+
+    At the top of the range (range_factor ≈ +1): reservation drops
+      ≈ 1.8 ticks — I am actively leaning to sell.
+    At the bottom (range_factor ≈ −1): reservation rises ≈ 1.8
+      ticks — actively leaning to buy.
+
+  The strategy stays passive (it never crosses the spread), but
+  asymmetrises the passive quoting so I harvest mean reversion at
+  extremes without paying any spread for the privilege.
+
+  INNOVATION 19 — Hot-quote detection.
+
+  At certain ticks I noticed the OSMIUM L1 bid would be 5+ ticks
+  above L2 AND 4+ ticks above the near-bid EMA. That is not normal
+  book depth — that is a transient aggressive buyer walking the book
+  up. Similarly, a "hot" ask signals a transient aggressive seller.
+  I maintain a hot-signal EMA (OSMIUM_HOT_SIGNAL_ALPHA = 0.20, take
+  threshold 0.40), and when the signal crosses threshold I tighten
+  my passive edge on the OPPOSITE side by 1 tick — capturing the
+  fade when the transient aggressor inevitably pulls back.
+
+  INNOVATION 20 — Toxicity decomposition (introduced in v1).
+
+  R1's single-OBI toxicity got replaced by a decomposed score:
+
+      toxicity = 0.58 × L1_imbalance
+               + 0.34 × microprice_deviation
+               − 0.08 × deep_imbalance
+
+  The negative coefficient on deep_imbalance is deliberate: on R2
+  data, deep queue pressure is often the OPPOSITE of short-horizon
+  L1 pressure. Treating deep volume as CONFIRMATION (as v0 did) was
+  mixing two different signals together. Subtracting it cleans the
+  toxicity estimate. Empirically, deep imbalance correlates with
+  longer-horizon mean-reversion pressure, while L1 imbalance
+  correlates with immediate execution pressure. Opposite effects
+  belong on opposite signs.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R2 EPOCH B — ROBUSTNESS AGAINST 80% RANDOMISATION (v2)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The 80% randomisation mask occasionally wipes one whole side of the
+visible book — some ticks I see only bids, others only asks. R1 v31
+had no special handling for that case; the EMA would silently update
+from a non-representative mid.
+
+  INNOVATION 21 — One-sided observation weighting.
+
+  When only one side of the book is visible I estimate a ref price as:
+
+      best_bid + HALF_SPREAD   if only bids visible
+      best_ask − HALF_SPREAD   if only asks visible
+
+  where PEPPER_ONE_SIDE_HALF_SPREAD = 7.0 (roughly half the typical
+  PEPPER near spread). I also scale the EMA and drift updates by
+  PEPPER_ONE_SIDE_OBS_WEIGHT = 0.50. Half-speed learning prevents a
+  randomly-masked one-sided tick from yanking the EMA toward a
+  fictional level.
+
+  The principle is more general: when the information source is
+  known to be noisy, shrink the learning rate. A signal that's half
+  reliable should contribute half as much to the state update.
+
+  INNOVATION 22 — OSMIUM L1-only quoting.
+
+  In R1 I posted OSMIUM passive liquidity as roughly L1_FRAC = 0.75
+  at the best price and 0.25 one tick further. Under the R2 matcher,
+  same-timestamp market trades fill only the FIRST matching order,
+  so a second passive level is not real queue diversification — it
+  just sits. I consolidated to L1_FRAC = 1.00, L2_FRAC = 0.00. One
+  strong quote at the best price beats a two-level split in this
+  matcher. A small but structural matcher-awareness improvement.
+
+  INNOVATION 23 — Adaptive round-anchor for OSMIUM.
+
+  The hardest lesson of R1 was that a hardcoded 10,000 anchor fails
+  out of sample. But OSMIUM still needs SOME notion of its long-run
+  level to express mean reversion. My solution, adaptive but stable:
+
+      unit = OSMIUM_ROUND_ANCHOR_UNIT = 100.0
+      round_anchor = round(first_valid_mid / unit) × unit
+
+  On the very first tick of the session where I have a valid mid, I
+  round it to the nearest 100 and treat that as the anchor. The
+  session-specific anchor is inferred from live data, not hard-coded.
+  If day −1 starts at 10,002, the anchor is 10,000; if day 0 starts
+  at 10,008, the anchor is 10,000; if a future regime starts at
+  10,098, the anchor becomes 10,100. The level assumption is
+  WEAKER than "10,000 is the true mean" — it is "the session mean
+  is near a round-100 multiple of the opening tick."
+
+  The round_anchor is then used as an inventory GATE, not a fair
+  value term. If the current mid is more than 6 ticks above the
+  round_anchor, I refuse to add to long (can_take_ask = False if
+  position > −32); similarly at the bottom. This converts the
+  anchor into inventory PERMISSION rather than PRICE — easier to
+  keep safe, harder to overfit than a fair-value weight.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R2 EPOCH C — KINEMATIC TRACKING AND TAKER/MAKER SEPARATION (v3–v10)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In this epoch I briefly experimented (again) with a fixed 10,000
+anchor for OSMIUM in v3/v4, before the same lesson from R1 reasserted
+itself and I reverted to the adaptive round-anchor. Two genuinely
+new ideas survived:
+
+  INNOVATION 24 — Alpha-beta kinematic tracker for PEPPER.
+
+  A drifting price is effectively a (level, velocity) state. A single
+  EMA tracks level but systematically underestimates velocity during
+  regime change. An alpha-beta filter — the simplest kinematic
+  Kalman filter stripped of its covariance update — tracks both:
+
+      residual     = mid − fast_level
+      fast_level  += α × residual                 (α = 0.35)
+      fast_slope  += (β × residual) / dt          (β = 0.08)
+
+  fast_slope is a cleaner velocity estimate than (ema − ema_slow),
+  especially at regime breaks where the slow EMA is furthest behind.
+  I use it as an extra confirmation signal in the adverse-carry
+  guard:
+
+      IF fast_slope < PEPPER_FAST_BREAK_SLOPE  (= −2.5)
+      AND clock_gap < PEPPER_FAST_BREAK_GAP    (= −38)
+      → early flat/short signal: flatten the PEPPER carry faster
+        than the EMA-only guard would have.
+
+  This is defensive, not aggressive. It catches waterfall moves
+  where prices drop fast enough that the slow-EMA chain lags behind
+  — exactly the scenario the R1 carry-break guard would most
+  struggle with.
+
+  INNOVATION 25 — Maker vs. taker reservation separation.
+
+  A structural oversight in R2 v0 / v1: I was applying the range-lean
+  AND the dislocation signal to BOTH the crossing (taker) fair and
+  the passive (maker) reservation. But crossing the spread costs one
+  full spread (≈ 4 ticks on OSMIUM). The range / dislocation edges
+  are small — 1 to 2 ticks. Burning a 4-tick spread to "capture" a
+  1-tick range lean is a losing trade on average.
+
+  The clean split, introduced in v6 and kept through the submission:
+
+      taker_fair         = fair − INV_SKEW × (position / limit)
+                           (ONLY inventory — NO range lean, NO
+                           dislocation, NO hot-quote shift)
+      maker_reservation  = fair − INV_SKEW × (position / limit)
+                           − RANGE_SKEW × range_factor
+                           + reversion_bias_from_dislocation
+
+  Crossing only on pure fair + inventory gifts. Range, dislocation,
+  and hot-quote signals express themselves exclusively as passive
+  quote placement and side sizing. This single split was probably
+  the largest conceptual improvement of the whole R2 journey —
+  small edges belong in passive quotes, not in take thresholds.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  R2 EPOCH D — DIP BUYER AND WHY I DROPPED IT (v11–v12 / final)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+v11 added one more speculative mechanism: a PEPPER dip-buyer.
+
+  When drift > 0.035 AND no carry break is detected AND the clock
+  gap dips sharply (< −18) AND the kinematic slope is weak (< −1.0),
+  I incremented a dip counter. When the counter hit 2, I raised the
+  PEPPER carry target by +8 units, buying slightly more aggressively
+  into what looked like a transient intra-trend dip. In local
+  backtests this looked great on the observed uptrend data.
+
+  v12 — the submitted R2 version — REMOVES the dip buyer.
+
+  The rationale is straight out of R1 Epoch E: any mechanism that
+  increases size on the adverse side of a POSSIBLE regime break
+  trades local PnL for tail risk. Even if the dip buyer is right
+  80% of the time, the 20% where the "dip" is the start of the
+  regime break costs more than the 80% of gains. Having already
+  learned in R1 what happens when a locally-positive change fails
+  officially, I stripped the dip buyer out.
+
+  What v12 / final retained from the whole R2 journey:
+
+    - bid() = 200                          (INNOVATION 17)
+    - OSMIUM range-directional lean        (INNOVATION 18)
+    - Hot-quote detection                  (INNOVATION 19)
+    - Decomposed toxicity L1 / microprice / −deep  (INNOVATION 20)
+    - One-sided observation weighting      (INNOVATION 21)
+    - L1-only OSMIUM quoting               (INNOVATION 22)
+    - Adaptive round-anchor at first valid mid  (INNOVATION 23)
+    - Alpha-beta kinematic tracker + fast-break (INNOVATION 24)
+    - Maker / taker reservation split      (INNOVATION 25)
+
+  Stripped:
+
+    - Fixed 10,000 OSMIUM anchor (tested in v3/v4, rejected — same
+      lesson as R1 Epoch E).
+    - PEPPER dip buyer (added in v11, removed in v12).
+    - Two-level OSMIUM passive layering (L2_FRAC = 0 from v2 on).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  KEY LESSONS FROM R1 AND R2
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  8. Separate signals by role. In R1 v31 and R2 final, the dual-EMA
+     drives fair, the flow signal drives execution urgency, the OLS
+     slope is a diagnostic (weight = 0), and the kinematic slope
+     gates the adverse-carry guard. Each signal has exactly one job.
+     Mixing them — for example putting OLS directly into fair — made
+     v26 look robust in backtests while quietly costing carry PnL.
+
+  9. Inventory policy can carry real alpha. The PEPPER carry-core /
+     trading-sleeve split (INNOVATION 13) is not a market-making
+     improvement — it is a change in what I thought the strategy WAS.
+     Market-making is symmetric inventory policy on a martingale.
+     Carry capture is asymmetric inventory policy on a drift. When
+     the process drifts, the second frame dominates.
+
+  10. Hardcoded price anchors are brittle. The static OSMIUM_FAIR =
+      10,000 was +424 locally in R1 v33 but worse officially. The
+      same pattern repeated in R2 (v3 / v4 fixed anchor lost to the
+      adaptive round-anchor). If an anchor is needed, DERIVE it from
+      live data (wall_mid, microprice, learned range anchor,
+      first-valid-mid rounding). Never hardcode a level.
+
+  11. Crossing is expensive; express alpha passively when possible.
+      R2's maker / taker split (INNOVATION 25) is the cleanest
+      statement of this rule. Range, dislocation, and hot-quote
+      signals live exclusively in the passive quote price and side
+      sizing; they never enter the take threshold. Small edges
+      deserve passive expression; only clean fair-value gaps
+      justify paying a spread.
+
+  12. Local PnL gains require official validation before trusting
+      them. Both R1 v33 (static anchor recovered +424 locally) and
+      R2 v11 (dip buyer) improved local backtests but were dropped
+      from the submission. Official results confirmed the
+      robustness-first choice was correct each time. Submit the
+      version you can explain and defend, not the version with the
+      highest local number.
+
+  13. Randomisation hurts most when the model silently assumes full
+      information. The R2 one-sided observation weighting and
+      L1-only consolidation (INNOVATIONS 21, 22) are ultimately
+      about not letting a random mask corrupt learned state or
+      mis-size orders. When the data source is noisy, the learning
+      rate should shrink proportionally.
+
+  14. Prefer inventory gates to fair-value terms for level
+      assumptions. The adaptive round-anchor (INNOVATION 23) does
+      NOT enter the OSMIUM fair-value formula. It gates whether I
+      am WILLING to buy higher or sell lower from the current
+      position, which is a softer, harder-to-overfit use of the
+      same information. A level assumption expressed as permission
+      degrades gracefully; a level assumption expressed as price
+      bias degrades silently.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FINAL POSITION (AS SUBMITTED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  R1 submission — R1 - trader (final).py, a.k.a. v31:
+    — 153rd out of 5,707 teams.
+    — PEPPER: wall-mid of ≥18-unit quotes, dual EMA (α_fast = 0.28,
+      α_slow = 0.015), trend-carry coefficient 0.55, flow EMA
+      (α = 0.25, weight 1.15), carry-core (68) / sleeve split,
+      adverse-carry guard with multi-signal hysteresis. OLS slope
+      computed as diagnostic but weighted 0 in fair.
+    — OSMIUM: fair = 0.46·wall_mid + 0.20·microprice
+      + 0.34·learned_range_anchor (no hardcoded level), EMA-tracked
+      inventory skew, toxicity-scaled regime sizing.
+    — NOT submitted: v33's 0.16·10,000 Bayesian anchor (+424 local,
+      worse officially).
+
+  R2 submission — R2 - trader (final).py:
+    — R1 v31 preserved as the PEPPER backbone (same EMA pair,
+      same trend-carry, same carry-core policy, same adverse-carry
+      guard).
+    — bid() = 200 to win the 25% MAF visibility bonus.
+    — OSMIUM additions: range-directional lean (1.8 ticks),
+      hot-quote detection (α = 0.20, take threshold 0.40),
+      decomposed L1/microprice/−deep toxicity, adaptive round-anchor
+      from first valid mid (unit = 100), alpha-beta kinematic
+      tracker (α = 0.35, β = 0.08) with fast-break carry-flatten
+      guard, maker/taker reservation separation, L1-only passive
+      liquidity, one-sided observation weighting.
+    — NOT submitted: fixed 10,000 anchor (v3 / v4), PEPPER dip
+      buyer (v11). Same lesson as R1: robustness first.

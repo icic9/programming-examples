@@ -1,0 +1,22 @@
+# Local editor settings
+.vscode/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Backtester generated output
+imc-prosperity-4-backtester/backtests/
+*.log
+
+# Scratch experiments inside the vendored backtester
+imc-prosperity-4-backtester/_tmp*.py
+imc-prosperity-4-backtester/test_*.py
+
+# Never publish nested repository metadata if the backtester is vendored.
+imc-prosperity-4-backtester/.git/
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+__MACOSX/

@@ -1,0 +1,134 @@
+HOW TO RUN THE PROJECT
+======================
+
+This file gives practical commands for running the local backtester.
+
+Recommended reading before running:
+
+  1. README.md
+  2. docs/COMPETITION_PRIMER.md
+  3. docs/STRATEGY_EXPLAINER.md
+  4. docs/CODE_WALKTHROUGH.md
+
+
+1. INSTALL DEPENDENCIES
+-----------------------
+
+Use Python 3.11 or 3.12 if possible.
+
+From this project folder, install the packages used by the trader and local
+backtester:
+
+  pip install jsonpickle typer tqdm ipython orjson
+
+
+2. RUN FROM THE BACKTESTER FOLDER
+---------------------------------
+
+The command-line entry point lives inside:
+
+  imc-prosperity-4-backtester/
+
+In PowerShell:
+
+  cd ".\imc-prosperity-4-backtester"
+
+The strategy files are one directory above the backtester, so paths are written
+with `..\`.
+
+
+3. RUN THE FINAL ROUND 2 STRATEGY
+---------------------------------
+
+From inside `imc-prosperity-4-backtester/`:
+
+  python -m prosperity4bt "..\R2 - trader (final).py" 2 --no-vis --no-progress
+
+Useful variants:
+
+  python -m prosperity4bt "..\R2 - trader (final).py" 2 --print --no-vis --no-progress
+  python -m prosperity4bt "..\R2 - trader (final).py" 2 --match-trades all --no-vis --no-progress
+  python -m prosperity4bt "..\R2 - trader (final).py" 2-0 --no-vis --no-progress
+  python -m prosperity4bt "..\R2 - trader (final).py" 2--1 --no-vis --no-progress
+
+Day syntax:
+
+  2      means all available days in round 2
+  2-0    means round 2 day 0
+  2--1   means round 2 day -1
+
+The double dash in `2--1` is intentional because the day number is negative.
+
+
+4. RUN THE FINAL ROUND 1 STRATEGY
+---------------------------------
+
+From inside `imc-prosperity-4-backtester/`:
+
+  python -m prosperity4bt "..\R1 - trader (final).py" 1 --no-vis --no-progress
+
+
+5. RUN AN ITERATION SNAPSHOT
+----------------------------
+
+The numbered strategy files are research snapshots. Example:
+
+  python -m prosperity4bt "..\R2 - trader (4).py" 2 --no-vis --no-progress
+
+This is useful when comparing how a rejected idea behaved against the final
+version.
+
+
+6. OUTPUT
+---------
+
+The backtester prints a day summary to the terminal. If output logging is
+enabled, it writes a log file under:
+
+  imc-prosperity-4-backtester\backtests\
+
+Use `--no-vis` when you do not want the browser visualizer to open.
+
+
+7. TROUBLESHOOTING
+------------------
+
+Problem:
+
+  ModuleNotFoundError: No module named 'jsonpickle'
+
+Fix:
+
+  pip install jsonpickle
+
+Problem:
+
+  ModuleNotFoundError: No module named 'typer'
+  ModuleNotFoundError: No module named 'tqdm'
+  ModuleNotFoundError: No module named 'IPython'
+  ModuleNotFoundError: No module named 'orjson'
+
+Fix:
+
+  pip install typer tqdm ipython orjson
+
+Problem:
+
+  FileNotFoundError for the trader file.
+
+Fix:
+
+  Make sure you are inside `imc-prosperity-4-backtester/` and quote filenames
+  that contain spaces:
+
+    python -m prosperity4bt "..\R2 - trader (final).py" 2 --no-vis
+
+Problem:
+
+  The visualizer opens but shows no data.
+
+Fix:
+
+  Run with `--no-vis`, then inspect the terminal summary first. If you want the
+  visualizer, load the generated `.log` file from the `backtests` folder into
+  the Prosperity visualizer manually.
